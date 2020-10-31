@@ -4,24 +4,32 @@
 #include <netinet/ip_icmp.h>
 #include <signal.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 #include <cstdint>
 
-void dump(uint8_t* object, size_t size)
+// Unique identifier so we can confirm that reply packets are indeed meant for us
+#define PACKET_ID 619
+// Extra logging for debugging
+#define VERBOSE 1
+
+void hexdump(uint8_t* object, size_t size)
 {
-    const unsigned char* byte;
-    for (byte = object; size--; ++byte) {
-        printf("%d", *byte);
+    for (size_t i = 0; i < size; ++i) {
+        if ((i % 16) == 0 && i != 0)
+            printf("\n");
+
+        printf("%002X ", *(object + i));
     }
+
     putchar('\n');
 }
 
-uint16_t in_cksum(void* addr, int len)
+uint16_t internet_checksum(void* addr, int len)
 {
     int sum = 0;
     uint16_t answer = 0;
@@ -118,7 +126,7 @@ int main(int argc, char* argv[])
     signal(SIGINT, shutdown);
 
     int fd = create_raw_socket();
-    sockaddr_in peer_address = host_address(host, true);
+    sockaddr_in peer_address = host_address(host, VERBOSE);
 
     uint16_t seq = 0;
     struct PingPacket {
@@ -129,14 +137,13 @@ int main(int argc, char* argv[])
     PingPacket ping_packet;
     memset(&ping_packet, 0, sizeof(PingPacket));
 
-    pid_t pid = getpid();
-    printf("running with pid %d\n", pid);
+    int16_t packet_identifier = 619; // spencer bday
     ping_packet.header.type = ICMP_ECHO;
     ping_packet.header.code = 0;
-    ping_packet.header.un.echo.id = htons(pid);
+    ping_packet.header.un.echo.id = htons(PACKET_ID);
     ping_packet.header.un.echo.sequence = htons(seq++);
     strcpy(ping_packet.msg, "echo packet\n");
-    ping_packet.header.checksum = in_cksum(&ping_packet, sizeof(PingPacket));
+    ping_packet.header.checksum = internet_checksum(&ping_packet, sizeof(PingPacket));
 
     int n = sendto(fd, &ping_packet, sizeof(PingPacket), 0, (const struct sockaddr*)&peer_address, sizeof(sockaddr_in));
     if (n < 0) {
@@ -146,26 +153,37 @@ int main(int argc, char* argv[])
         printf("awaiting echo response packet\n");
     }
 
-    PingPacket pong_packet;
-    memset(&pong_packet, 0, sizeof(PingPacket));
+    struct PongPacket {
+        char ip[20];
+        struct icmphdr header;
+        char msg[64 - sizeof(struct icmphdr) - 20];
+    };
+
+    PongPacket pong_packet;
+    memset(&pong_packet, 0, sizeof(PongPacket));
 
     while (1) {
         socklen_t address_size = sizeof(peer_address);
-        int ret = recvfrom(fd, &pong_packet, sizeof(PingPacket), 0, (struct sockaddr*)&peer_address, &address_size);
+        int ret = recvfrom(fd, &pong_packet, sizeof(PongPacket), 0, (struct sockaddr*)&peer_address, &address_size);
         if (ret < 0)
             error("recvfrom");
 
-        // Uhhh, what? https://blog.benjojo.co.uk/post/linux-icmp-type-69
-        dump((uint8_t*)&pong_packet, sizeof(PingPacket));
+        if (VERBOSE) {
+            hexdump((uint8_t*)&pong_packet, sizeof(PongPacket));
+            printf("type: %d\n", pong_packet.header.type);
+            printf("code: %d\n", pong_packet.header.code);
+            printf("id: %d\n", ntohs(pong_packet.header.un.echo.id));
+            printf("sequence: %d\n", ntohs(pong_packet.header.un.echo.sequence));
+        }
 
-        // if (pong_packet.header.type != ICMP_ECHOREPLY)
-        // continue;
+        if (pong_packet.header.type != ICMP_ECHOREPLY)
+            continue;
 
-        // if (pong_packet.header.code != 0)
-        // continue;
+        if (pong_packet.header.code != 0)
+            continue;
 
-        // if (ntohs(pong_packet.header.un.echo.id) != pid)
-        // continue;
+        if (ntohs(pong_packet.header.un.echo.id) != PACKET_ID)
+            continue;
 
         printf("Pong received!\n");
         break;
