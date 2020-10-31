@@ -8,32 +8,43 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
-#include <cstdint>
+#include "prelude.h"
+
+// -------
+// Config
+// -------
 
 // Unique identifier so we can confirm that reply packets are indeed meant for us
 #define PACKET_ID 619
 // Extra logging for debugging
-#define VERBOSE 1
+#define VERBOSE 0
+// Number of times to ping the remote host to collect statistics
+#define PING_COUNT 5
 
-void hexdump(uint8_t* object, size_t size)
+// -------
+// Utility
+// -------
+
+void hexdump(u8* object, size_t size)
 {
     for (size_t i = 0; i < size; ++i) {
         if ((i % 16) == 0 && i != 0)
             printf("\n");
 
-        printf("%002X ", *(object + i));
+        printf("%02X ", *(object + i));
     }
 
     putchar('\n');
 }
 
-uint16_t internet_checksum(void* addr, int len)
+u16 internet_checksum(void* addr, int len)
 {
     int sum = 0;
-    uint16_t answer = 0;
-    uint16_t* w = (uint16_t*)addr;
+    u16 answer = 0;
+    u16* w = (u16*)addr;
     int nleft = len;
 
     // Our algorithm is simple, using a 32 bit accumulator (sum), we add
@@ -81,7 +92,7 @@ int create_raw_socket()
     return fd;
 }
 
-sockaddr_in host_address(const char* host_name, bool verbose)
+sockaddr_in host_address(const char* host_name)
 {
     struct hostent* he;
     if ((he = gethostbyname(host_name)) == NULL) {
@@ -91,7 +102,8 @@ sockaddr_in host_address(const char* host_name, bool verbose)
     int address_count = 0;
     struct in_addr** addresses;
     addresses = (struct in_addr**)he->h_addr_list;
-    if (verbose) {
+
+    if (VERBOSE) {
         printf("Official host name for %s is %s\n\n", host_name, he->h_name);
         printf("IP Addresses:\n");
         for (int i = 0; addresses[i] != NULL; i++) {
@@ -101,7 +113,7 @@ sockaddr_in host_address(const char* host_name, bool verbose)
         printf("\n");
     }
 
-    if (address_count > 1 && verbose) {
+    if (address_count > 1 && VERBOSE) {
         printf("detected more than 1 IP address but using the first found\n");
     }
 
@@ -115,78 +127,138 @@ sockaddr_in host_address(const char* host_name, bool verbose)
     return peer_address;
 }
 
+f64 now()
+{
+    struct timespec now;
+
+    if ((clock_gettime(CLOCK_MONOTONIC, &now) < 0))
+        perror("clock_gettime");
+
+    // ts.tv_nsec rolls to 0 every second. We can get accurate measurement by multiplying
+    // by the second
+    f64 timestamp = now.tv_sec * 1000000000 + now.tv_nsec;
+    return timestamp;
+}
+
+// -------
+// Types
+// -------
+
+struct PingPacket {
+    struct icmphdr header;
+    char msg[64 - sizeof(struct icmphdr)];
+};
+
+struct PongPacket {
+    char ip[20];
+    struct icmphdr header;
+    char msg[64 - sizeof(struct icmphdr) - 20];
+};
+
+struct EchoStats {
+    int bytes_sent;
+    u16 sequence_num;
+    f64 time_in_ms;
+};
+
+PingPacket init_ping_packet(u16 sequence_num)
+{
+    PingPacket ping_packet;
+    memset(&ping_packet, 0, sizeof(PingPacket));
+
+    ping_packet.header.type = ICMP_ECHO;
+    ping_packet.header.code = 0;
+    ping_packet.header.un.echo.id = htons(PACKET_ID);
+    ping_packet.header.un.echo.sequence = htons(sequence_num);
+    strcpy(ping_packet.msg, "echo packet\n");
+    ping_packet.header.checksum = internet_checksum(&ping_packet, sizeof(PingPacket));
+    return ping_packet;
+}
+
+EchoStats* init_stat(u16 sequence_num)
+{
+    EchoStats* stat = (EchoStats*)malloc(sizeof(EchoStats));
+    memset(stat, 0, sizeof(EchoStats));
+    stat->sequence_num = sequence_num;
+    return stat;
+}
+
+void print_stat(EchoStats* stat)
+{
+    if (stat->bytes_sent == 0)
+        return;
+
+    printf("%d bytes from %d: icmp_seq %d time=%.1f ms\n", stat->bytes_sent, stat->bytes_sent, (stat->sequence_num + 1), stat->time_in_ms);
+}
+
+global EchoStats* stats[PING_COUNT];
+
 int main(int argc, char* argv[])
 {
+    // Arg parsing
     char* host = argv[1];
     if (host == NULL) {
         printf("Usage: ping <host-name>\n");
         exit(1);
     }
 
+    // Setup
     signal(SIGINT, shutdown);
 
     int fd = create_raw_socket();
-    sockaddr_in peer_address = host_address(host, VERBOSE);
+    sockaddr_in peer_address = host_address(host);
 
-    uint16_t seq = 0;
-    struct PingPacket {
-        struct icmphdr header;
-        char msg[64 - sizeof(struct icmphdr)];
-    };
+    // Fire away!
+    u16 sequence_num = 0;
+    while (PING_COUNT > sequence_num) {
+        EchoStats* stat = init_stat(sequence_num);
+        stats[sequence_num] = stat;
 
-    PingPacket ping_packet;
-    memset(&ping_packet, 0, sizeof(PingPacket));
+        PingPacket ping_packet = init_ping_packet(sequence_num++);
 
-    int16_t packet_identifier = 619; // spencer bday
-    ping_packet.header.type = ICMP_ECHO;
-    ping_packet.header.code = 0;
-    ping_packet.header.un.echo.id = htons(PACKET_ID);
-    ping_packet.header.un.echo.sequence = htons(seq++);
-    strcpy(ping_packet.msg, "echo packet\n");
-    ping_packet.header.checksum = internet_checksum(&ping_packet, sizeof(PingPacket));
-
-    int n = sendto(fd, &ping_packet, sizeof(PingPacket), 0, (const struct sockaddr*)&peer_address, sizeof(sockaddr_in));
-    if (n < 0) {
-        error("sendto -> sending echo ICMP packet");
-    } else {
-        printf("sent %d bytes\n", n);
-        printf("awaiting echo response packet\n");
-    }
-
-    struct PongPacket {
-        char ip[20];
-        struct icmphdr header;
-        char msg[64 - sizeof(struct icmphdr) - 20];
-    };
-
-    PongPacket pong_packet;
-    memset(&pong_packet, 0, sizeof(PongPacket));
-
-    while (1) {
-        socklen_t address_size = sizeof(peer_address);
-        int ret = recvfrom(fd, &pong_packet, sizeof(PongPacket), 0, (struct sockaddr*)&peer_address, &address_size);
-        if (ret < 0)
-            error("recvfrom");
-
-        if (VERBOSE) {
-            hexdump((uint8_t*)&pong_packet, sizeof(PongPacket));
-            printf("type: %d\n", pong_packet.header.type);
-            printf("code: %d\n", pong_packet.header.code);
-            printf("id: %d\n", ntohs(pong_packet.header.un.echo.id));
-            printf("sequence: %d\n", ntohs(pong_packet.header.un.echo.sequence));
+        f64 start_time = now();
+        int sent = sendto(fd, &ping_packet, sizeof(PingPacket), 0, (const struct sockaddr*)&peer_address, sizeof(sockaddr_in));
+        if (sent < 0) {
+            error("sendto -> sending echo ICMP packet");
+        } else {
+            stat->bytes_sent = sent;
+            if (VERBOSE)
+                printf("awaiting echo response packet\n");
         }
 
-        if (pong_packet.header.type != ICMP_ECHOREPLY)
-            continue;
+        PongPacket pong_packet;
+        memset(&pong_packet, 0, sizeof(PongPacket));
 
-        if (pong_packet.header.code != 0)
-            continue;
+        while (1) {
+            socklen_t address_size = sizeof(peer_address);
+            int ret = recvfrom(fd, &pong_packet, sizeof(PongPacket), 0, (struct sockaddr*)&peer_address, &address_size);
+            if (ret < 0)
+                error("recvfrom");
 
-        if (ntohs(pong_packet.header.un.echo.id) != PACKET_ID)
-            continue;
+            if (VERBOSE) {
+                hexdump((u8*)&pong_packet, sizeof(PongPacket));
+                printf("type: %d\n", pong_packet.header.type);
+                printf("code: %d\n", pong_packet.header.code);
+                printf("id: %d\n", ntohs(pong_packet.header.un.echo.id));
+                printf("sequence: %d\n", ntohs(pong_packet.header.un.echo.sequence));
+            }
 
-        printf("Pong received!\n");
-        break;
+            if (pong_packet.header.type != ICMP_ECHOREPLY)
+                continue;
+
+            if (pong_packet.header.code != 0)
+                continue;
+
+            if (ntohs(pong_packet.header.un.echo.id) != PACKET_ID)
+                continue;
+
+            f64 time_taken = (now() - start_time) / 1000000;
+            stat->time_in_ms = time_taken;
+            break;
+        }
+
+        print_stat(stat);
+        sleep(1);
     }
     return 0;
 }
