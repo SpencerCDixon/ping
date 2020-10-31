@@ -68,12 +68,6 @@ u16 internet_checksum(void* addr, int len)
     return answer;
 }
 
-void shutdown(int sig)
-{
-    printf("\nshutting down ping command...\n");
-    exit(1);
-}
-
 void error(const char* msg)
 {
     int len = strlen(msg);
@@ -86,9 +80,8 @@ void error(const char* msg)
 int create_raw_socket()
 {
     int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-    if (fd < 0) {
+    if (fd < 0)
         error("creating raw socket, make sure being run as 'sudo'");
-    }
     return fd;
 }
 
@@ -100,8 +93,7 @@ sockaddr_in host_address(const char* host_name)
     }
 
     int address_count = 0;
-    struct in_addr** addresses;
-    addresses = (struct in_addr**)he->h_addr_list;
+    struct in_addr** addresses = (struct in_addr**)he->h_addr_list;
 
     if (VERBOSE) {
         printf("Official host name for %s is %s\n\n", host_name, he->h_name);
@@ -188,10 +180,30 @@ void print_stat(EchoStats* stat)
     if (stat->bytes_sent == 0)
         return;
 
-    printf("%d bytes from %d: icmp_seq %d time=%.1f ms\n", stat->bytes_sent, stat->bytes_sent, (stat->sequence_num + 1), stat->time_in_ms);
+    printf("%d bytes sent: icmp_seq %d time=%.1f ms\n", stat->bytes_sent, (stat->sequence_num + 1), stat->time_in_ms);
 }
 
+// -------
+// Main
+// -------
+
 global EchoStats* stats[PING_COUNT];
+
+void shutdown(int sig)
+{
+    printf("\nshutting down ping command...\n");
+
+    int num_sent = 0;
+    f64 total_time = 0.0f;
+    for (size_t i = 0; i < PING_COUNT; ++i) {
+        if (stats[i]->bytes_sent > 0) {
+            num_sent++;
+            total_time += stats[i]->time_in_ms;
+        }
+    }
+    printf("-----Num pings sent: %d, average time: %.1f ms, total time: %.1f-----\n", num_sent, (total_time / num_sent), total_time);
+    exit(1);
+}
 
 int main(int argc, char* argv[])
 {
@@ -210,9 +222,11 @@ int main(int argc, char* argv[])
 
     // Fire away!
     u16 sequence_num = 0;
+    for (size_t i = 0; i < PING_COUNT; ++i)
+        stats[i] = init_stat(i);
+
     while (PING_COUNT > sequence_num) {
-        EchoStats* stat = init_stat(sequence_num);
-        stats[sequence_num] = stat;
+        EchoStats* stat = stats[sequence_num];
 
         PingPacket ping_packet = init_ping_packet(sequence_num++);
 
