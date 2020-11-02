@@ -1,6 +1,4 @@
 cmake_minimum_required(VERSION 3.16)
-project(ping)
+project(ping C)
 
-set(CMAKE_CXX_STANDARD 20)
-
-add_executable(ping main.cpp prelude.h)
+add_executable(ping main.c prelude.h debug.h)

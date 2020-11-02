@@ -11,6 +11,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "debug.h"
 #include "prelude.h"
 
 // -------
@@ -27,18 +28,6 @@
 // -------
 // Utility
 // -------
-
-void hexdump(u8* object, size_t size)
-{
-    for (size_t i = 0; i < size; ++i) {
-        if ((i % 16) == 0 && i != 0)
-            printf("\n");
-
-        printf("%02X ", *(object + i));
-    }
-
-    putchar('\n');
-}
 
 u16 internet_checksum(void* addr, int len)
 {
@@ -57,7 +46,7 @@ u16 internet_checksum(void* addr, int len)
 
     /* mop up an odd byte, if necessary */
     if (nleft == 1) {
-        *(u_char*)(&answer) = *(u_char*)w;
+        *(char*)(&answer) = *(char*)w;
         sum += answer;
     }
 
@@ -85,7 +74,7 @@ int create_raw_socket()
     return fd;
 }
 
-sockaddr_in host_address(const char* host_name)
+struct sockaddr_in host_address(const char* host_name)
 {
     struct hostent* he;
     if ((he = gethostbyname(host_name)) == NULL) {
@@ -109,7 +98,7 @@ sockaddr_in host_address(const char* host_name)
         printf("detected more than 1 IP address but using the first found\n");
     }
 
-    sockaddr_in peer_address;
+    struct sockaddr_in peer_address;
     memset(&peer_address, 0, sizeof(peer_address));
     peer_address.sin_family = AF_INET;
     peer_address.sin_port = 0;
@@ -136,22 +125,22 @@ f64 now()
 // Types
 // -------
 
-struct PingPacket {
+typedef struct {
     struct icmphdr header;
     char msg[64 - sizeof(struct icmphdr)];
-};
+} PingPacket;
 
-struct PongPacket {
+typedef struct {
     char ip[20];
     struct icmphdr header;
     char msg[64 - sizeof(struct icmphdr) - 20];
-};
+} PongPacket;
 
-struct EchoStats {
+typedef struct {
     int bytes_sent;
     u16 sequence_num;
     f64 time_in_ms;
-};
+} EchoStats;
 
 PingPacket init_ping_packet(u16 sequence_num)
 {
@@ -189,7 +178,7 @@ void print_stat(EchoStats* stat)
 
 global EchoStats* stats[PING_COUNT];
 
-void shutdown(int sig)
+internal void on_sig_int(int sig)
 {
     printf("\nshutting down ping command...\n");
 
@@ -215,10 +204,10 @@ int main(int argc, char* argv[])
     }
 
     // Setup
-    signal(SIGINT, shutdown);
+    signal(SIGINT, on_sig_int);
 
     int fd = create_raw_socket();
-    sockaddr_in peer_address = host_address(host);
+    struct sockaddr_in peer_address = host_address(host);
 
     // Fire away!
     u16 sequence_num = 0;
@@ -231,7 +220,7 @@ int main(int argc, char* argv[])
         PingPacket ping_packet = init_ping_packet(sequence_num++);
 
         f64 start_time = now();
-        int sent = sendto(fd, &ping_packet, sizeof(PingPacket), 0, (const struct sockaddr*)&peer_address, sizeof(sockaddr_in));
+        int sent = sendto(fd, &ping_packet, sizeof(PingPacket), 0, (const struct sockaddr*)&peer_address, sizeof(struct sockaddr_in));
         if (sent < 0) {
             error("sendto -> sending echo ICMP packet");
         } else {
