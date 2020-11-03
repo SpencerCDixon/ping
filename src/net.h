@@ -52,16 +52,21 @@ typedef struct {
     s64 time_in_ms;
 } echo_stat;
 
+u16 packet_id()
+{
+    return (u16)getpid();
+}
+
+
 ping_packet init_ping_packet(u16 sequence_num)
 {
     ping_packet ping_packet;
     memset(&ping_packet, 0, sizeof(ping_packet));
 
-    /* pid_t pid = getpid(); */
     ping_packet.header.type = ICMP_ECHO;
     ping_packet.header.code = 0;
     // Andreas: using PID here freezes the program and doesn't run
-    ping_packet.header.un.echo.id = htons(PACKET_ID);
+    ping_packet.header.un.echo.id = htons(packet_id());
     ping_packet.header.un.echo.sequence = htons(sequence_num);
     strcpy(ping_packet.msg, "echo packet\n");
     ping_packet.header.checksum = internet_checksum(&ping_packet, sizeof(ping_packet));

@@ -114,7 +114,7 @@ int main(int argc, char* argv[])
             if (pong_packet.header.code != 0)
                 continue;
 
-            if (ntohs(pong_packet.header.un.echo.id) != PACKET_ID)
+            if (ntohs(pong_packet.header.un.echo.id) != packet_id())
                 continue;
 
             if ((end_time = timestamp_ms()) < 0) {
