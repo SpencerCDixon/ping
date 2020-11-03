@@ -1,11 +1,12 @@
 #pragma once
 
-#include "prelude.h"
+#include <sys/types.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/ip_icmp.h>
 
-// Unique identifier so we can confirm that reply packets are indeed meant for us
-#define PACKET_ID 619
-// Extra logging for debugging
-#define VERBOSE 0
+#include "prelude.h"
 
 internal u16 internet_checksum(void* addr, int len)
 {
@@ -57,7 +58,6 @@ u16 packet_id()
     return (u16)getpid();
 }
 
-
 ping_packet init_ping_packet(u16 sequence_num)
 {
     ping_packet ping_packet;
@@ -65,11 +65,11 @@ ping_packet init_ping_packet(u16 sequence_num)
 
     ping_packet.header.type = ICMP_ECHO;
     ping_packet.header.code = 0;
-    // Andreas: using PID here freezes the program and doesn't run
     ping_packet.header.un.echo.id = htons(packet_id());
     ping_packet.header.un.echo.sequence = htons(sequence_num);
     strcpy(ping_packet.msg, "echo packet\n");
     ping_packet.header.checksum = internet_checksum(&ping_packet, sizeof(ping_packet));
+
     return ping_packet;
 }
 
@@ -118,7 +118,6 @@ struct sockaddr_in host_address(const char* host_name)
     memset(&peer_address, 0, sizeof(peer_address));
     peer_address.sin_family = AF_INET;
     peer_address.sin_port = 0;
-    // Andreas: Is this safe or is it going to bork when memory changes?
     peer_address.sin_addr.s_addr = (in_addr_t)addresses[0]->s_addr;
 
     return peer_address;

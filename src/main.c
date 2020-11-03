@@ -1,24 +1,13 @@
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/ip_icmp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "debug.h"
 #include "net.h"
 #include "prelude.h"
-
-// -------
-// Config
-// -------
 
 // Number of times to ping the remote host to collect statistics
 #define PING_COUNT 5
@@ -86,12 +75,12 @@ int main(int argc, char* argv[])
             stat->bytes_sent = sent;
         }
 
-        pong_packet pong_packet;
-        memset(&pong_packet, 0, sizeof(pong_packet));
+        pong_packet pong;
+        memset(&pong, 0, sizeof(pong));
 
         while (1) {
             socklen_t address_size = sizeof(peer_address);
-            int ret = recvfrom(fd, &pong_packet, sizeof(pong_packet), 0, (struct sockaddr*)&peer_address, &address_size);
+            int ret = recvfrom(fd, &pong, sizeof(pong), 0, (struct sockaddr*)&peer_address, &address_size);
             if (ret < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     fprintf(stderr, "Peer request timed out (seq=%d)\n", ping.header.un.echo.sequence);
@@ -108,13 +97,13 @@ int main(int argc, char* argv[])
                 printf("sequence: %d\n", ntohs(pong_packet.header.un.echo.sequence));
 #endif
 
-            if (pong_packet.header.type != ICMP_ECHOREPLY)
+            if (pong.header.type != ICMP_ECHOREPLY)
                 continue;
 
-            if (pong_packet.header.code != 0)
+            if (pong.header.code != 0)
                 continue;
 
-            if (ntohs(pong_packet.header.un.echo.id) != packet_id())
+            if (ntohs(pong.header.un.echo.id) != packet_id())
                 continue;
 
             if ((end_time = timestamp_ms()) < 0) {
